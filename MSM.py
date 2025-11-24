@@ -1,35 +1,61 @@
 from collections import defaultdict
+import csv
+import os
 import re
 
 
+def _load_tv_brands():
+    """
+    Load list of known TV brands from the CSV file.
+    Returns a set of lowercase brand names for quick membership checks.
+    """
+    csv_path = os.path.join(os.path.dirname(__file__), 'television_brands.csv')
+    brands = set()
+
+    with open(csv_path, newline='', encoding='utf-8') as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                brand = row.get('Brand', '').strip()
+                if brand:
+                    brands.add(brand.lower())
+    
+    return brands
+
+
+_TV_BRANDS = _load_tv_brands()
+_TV_BRANDS_SORTED = sorted(_TV_BRANDS, key=len, reverse=True)
+print(_TV_BRANDS_SORTED)
+
 def calcSim(s1, s2):
     """
-    Calculate overlapping Q-Gram Similarity (Jaccard on q-grams) between two strings.
-    Uses q=3 for q-gram generation.
-    
-    Args:
-        s1 (str): First string
-        s2 (str): Second string
-        
-    Returns:
-        float: Jaccard similarity score between 0.0 and 1.0
+    Overlapping q-gram similarity. 
+    Uses q=3 and pads with q-1 dummy characters at both ends.
     """
-    def generate_qgrams(s, q=3):
-        """Generate q-grams from a string."""
-        if len(s) < q:
-            return set([s])
-        return set([s[i:i+q] for i in range(len(s) - q + 1)])
-    
-    qgrams1 = generate_qgrams(s1.lower())
-    qgrams2 = generate_qgrams(s2.lower())
-    
-    if len(qgrams1) == 0 and len(qgrams2) == 0:
+    q = 3
+    pad_char = "#"
+
+    def generate_qgrams(s):
+        # pad with (q-1) chars on both sides
+        padded = pad_char * (q - 1) + s.lower() + pad_char * (q - 1)
+        return [padded[i:i+q] for i in range(len(padded) - q + 1)]
+
+    qgrams1 = generate_qgrams(s1)
+    qgrams2 = generate_qgrams(s2)
+
+    set1, set2 = set(qgrams1), set(qgrams2)
+
+    n1, n2 = len(set1), len(set2)
+    intersection = len(set1 & set2)
+
+    # qGramDistance = |Δ| = n1 + n2 − 2·|intersection|
+    qdist = n1 + n2 - 2 * intersection
+
+    # similarity = (n1 + n2 − qdist) / (n1 + n2) = 2·intersection / (n1 + n2)
+    denom = n1 + n2
+    if denom == 0:
         return 1.0
-    
-    intersection = len(qgrams1 & qgrams2)
-    union = len(qgrams1 | qgrams2)
-    
-    return intersection / union if union > 0 else 0.0
+
+    return (denom - qdist) / denom
 
 
 def sameShop(p1, p2):
@@ -45,6 +71,65 @@ def sameShop(p1, p2):
     """
     return p1.get('shop') == p2.get('shop')
 
+def _normalize_brand(brand_value):
+    """
+    Normalize a brand string by matching it against the known brand list.
+    Returns the matched brand in lowercase, or the cleaned brand string if unknown.
+    """
+    if not brand_value:
+        return ''
+
+    cleaned = brand_value.strip().lower()
+    if not cleaned:
+        return ''
+
+    if cleaned in _TV_BRANDS:
+        return cleaned
+
+    # Try partial/substring matches for cases like "Samsung Electronics"
+    for known_brand in _TV_BRANDS:
+        if known_brand in cleaned or cleaned in known_brand:
+            return known_brand
+
+    return cleaned
+
+
+def _collect_product_strings(product):
+    """
+    Traverse the product structure and collect all string values (including keys).
+    """
+    collected = []
+
+    def _walk(value):
+        if isinstance(value, str):
+            collected.append(value)
+        elif isinstance(value, dict):
+            for k, v in value.items():
+                _walk(k)
+                _walk(v)
+        elif isinstance(value, (list, tuple, set)):
+            for item in value:
+                _walk(item)
+
+    _walk(product)
+    return collected
+
+
+def _detect_brand(product):
+    """
+    Inspect every string contained in the product structure and return the first
+    known brand that appears as a substring (case-insensitive).
+    """
+    strings = _collect_product_strings(product)
+    for text in strings:
+        if not text:
+            continue
+        lowered = text.lower()
+        for brand in _TV_BRANDS_SORTED:
+            if brand in lowered:
+                return brand
+    return ''
+
 
 def diffBrand(p1, p2):
     """
@@ -58,10 +143,14 @@ def diffBrand(p1, p2):
     Returns:
         bool: True if brands are different, False if same or either missing
     """    
-    brand1 = p1.get('featuresMap', {}).get('Brand', '')
-    brand2 = p2.get('featuresMap', {}).get('Brand', '')
-    
-    return brand1 != brand2 and brand1 != '' and brand2 != ''
+    # Attempt to match an explicit Brand value first
+    brand1_raw = p1.get('featuresMap', {}).get('Brand', '')
+    brand2_raw = p2.get('featuresMap', {}).get('Brand', '')
+
+    norm_brand1 = _normalize_brand(brand1_raw) or _detect_brand(p1)
+    norm_brand2 = _normalize_brand(brand2_raw) or _detect_brand(p2)
+
+    return norm_brand1 != norm_brand2 and norm_brand1 != '' and norm_brand2 != ''
 
 
 def key(kvp):
@@ -148,6 +237,7 @@ def mw(set_C, set_D):
     return intersection / union if union > 0 else 0.0
 
 
+# This needs checking!!!
 def TMWMSim(p1, p2, alpha, beta):
     """
     Title Model Words Method (TMWM) Similarity.
@@ -197,7 +287,7 @@ def TMWMSim(p1, p2, alpha, beta):
     # Otherwise return -1.0
     return -1.0
 
-
+# Need to check this!!!
 def minFeatures(p1, p2):
     """
     Return the minimum number of Key-Value Pairs (KVPs) between two product structures.
@@ -269,6 +359,168 @@ def hClustering(dist, epsilon):
         # If only one cluster remains, we're done
         if len(clusters) <= 1:
             break
+    
+    return clusters
+
+
+def MSM_algorithm(S, alpha=0.3, beta=0.3, gamma=0.75, epsilon=0.5, mu=0.6):
+    """
+    Multi-component Similarity Method (MSM) Algorithm.
+    
+    Computes a multi-component similarity between products from different shops
+    and performs hierarchical clustering to group duplicate products.
+    
+    Args:
+        S (dict): Dictionary where keys are shop names and values are lists of products.
+                  Each product is a dict with 'shop', 'title', 'featuresMap', etc.
+        alpha (float): Threshold for TMWMSim title similarity
+        beta (float): Threshold for TMWMSim model word Jaccard similarity
+        gamma (float): Threshold similarity for two keys to be considered equal
+        epsilon (float): Dissimilarity threshold for hierarchical clustering
+        mu (float): Fixed weight of the TMWMSim similarity when it returns a value
+        
+    Returns:
+        list: List of clusters, where each cluster is a set of product indices
+    """
+    # Step 1: Create a flat list of all products and track which shop each belongs to
+    all_products = []
+    product_to_shop = {}  # Maps product index to shop name
+    shop_to_indices = {}  # Maps shop name to list of product indices
+    shop_product_to_global_idx = {}  # Maps (shop_name, local_idx) to global index
+    
+    for shop_name, products in S.items():
+        shop_indices = []
+        for local_idx, product in enumerate(products):
+            global_idx = len(all_products)
+            all_products.append(product)
+            product_to_shop[global_idx] = shop_name
+            shop_indices.append(global_idx)
+            shop_product_to_global_idx[(shop_name, local_idx)] = global_idx
+        shop_to_indices[shop_name] = shop_indices
+    
+    n = len(all_products)
+    
+    # Step 2: Initialize dissimilarity matrix
+    # Set diagonal to 0 (distance from product to itself)
+    dist = [[float('inf')] * n for _ in range(n)]
+    for i in range(n):
+        dist[i][i] = 0.0
+    
+    # Step 3: Compute dissimilarity for each pair of products from different shops
+    for k, shop_name in enumerate(S.keys()):
+        shop_k_products = S[shop_name]
+        
+        for i, pi in enumerate(shop_k_products):
+            # Get the global index of this product
+            pi_idx = shop_product_to_global_idx.get((shop_name, i))
+            if pi_idx is None:
+                continue
+            
+            # Compare with all products from other shops (S \ Sk)
+            for j, pj in enumerate(all_products):
+                pj_shop = product_to_shop[j]
+                
+                # Skip if same shop or same product
+                if pj_shop == shop_name or pi_idx == j:
+                    continue
+                
+                # Skip if already computed (to avoid duplicate computation)
+                if dist[pi_idx][j] != float('inf'):
+                    continue
+                
+                # Check if same shop or different brand
+                if sameShop(pi, pj) or diffBrand(pi, pj):
+                    dist[pi_idx][j] = float('inf')
+                    dist[j][pi_idx] = float('inf')  # Make symmetric
+                else:
+                    # Calculate multi-component similarity
+                    # Initialize variables
+                    sim = 0.0
+                    avgSim = 0.0
+                    m = 0  # number of matches
+                    w = 0.0  # weight of matches
+                    
+                    # Initialize non-matching keys as all KVPs from both products
+                    features_i = pi.get('featuresMap', {})
+                    features_j = pj.get('featuresMap', {})
+                    
+                    # Convert featuresMap to list of KVPs (as tuples)
+                    nmki = [(k, v) for k, v in features_i.items()]
+                    nmkj = [(k, v) for k, v in features_j.items()]
+                    
+                    # Match KVPs based on key similarity
+                    matched_i = set()
+                    matched_j = set()
+                    
+                    for q_idx, q in enumerate(nmki):
+                        if q_idx in matched_i:
+                            continue
+                        key_q = key(q)
+                        
+                        for r_idx, r in enumerate(nmkj):
+                            if r_idx in matched_j:
+                                continue
+                            key_r = key(r)
+                            
+                            # Calculate key similarity
+                            keySim = calcSim(key_q, key_r)
+                            
+                            if keySim > gamma:
+                                # Keys are similar enough, match them
+                                valueSim = calcSim(value(q), value(r))
+                                weight = keySim
+                                
+                                sim += weight * valueSim
+                                m += 1
+                                w += weight
+                                
+                                # Mark as matched
+                                matched_i.add(q_idx)
+                                matched_j.add(r_idx)
+                                break  # Each KVP from pi matches at most one from pj
+                    
+                    # Calculate average similarity
+                    if w > 0:
+                        avgSim = sim / w
+                    
+                    # Get remaining non-matching keys
+                    remaining_i = [nmki[i] for i in range(len(nmki)) if i not in matched_i]
+                    remaining_j = [nmkj[i] for i in range(len(nmkj)) if i not in matched_j]
+                    
+                    # Extract model words from remaining non-matching keys
+                    # Create temporary products with only remaining features
+                    temp_pi = {'featuresMap': {k: v for k, v in remaining_i}}
+                    temp_pj = {'featuresMap': {k: v for k, v in remaining_j}}
+                    
+                    mw_i = exMW(temp_pi)
+                    mw_j = exMW(temp_pj)
+                    mwPerc = mw(mw_i, mw_j)
+                    
+                    # Calculate title similarity
+                    titleSim = TMWMSim(pi, pj, alpha, beta)
+                    
+                    # Calculate hSim based on whether titleSim is -1
+                    if titleSim == -1.0:
+                        # Title similarity doesn't meet threshold
+                        theta1 = m / minFeatures(pi, pj) if minFeatures(pi, pj) > 0 else 0.0
+                        theta2 = 1.0 - theta1
+                        hSim = theta1 * avgSim + theta2 * mwPerc
+                    else:
+                        # Title similarity meets threshold
+                        min_feat = minFeatures(pi, pj)
+                        if min_feat > 0:
+                            theta1 = (1.0 - mu) * m / min_feat
+                        else:
+                            theta1 = 0.0
+                        theta2 = 1.0 - mu - theta1
+                        hSim = theta1 * avgSim + theta2 * mwPerc + mu * titleSim
+                    
+                    # Convert similarity to dissimilarity
+                    dist[pi_idx][j] = 1.0 - hSim
+                    dist[j][pi_idx] = 1.0 - hSim  # Make symmetric
+    
+    # Step 4: Perform hierarchical clustering
+    clusters = hClustering(dist, epsilon)
     
     return clusters
 
