@@ -192,7 +192,6 @@ def clustering(dissimilarity_matrix, threshold):
 def main(candidate_pairs, data, gamma, epsilon, mu):
     dissimilarity: pd.DataFrame = candidate_pairs.copy()
 
-
     print("Begin MSM...\n")
 
     for i in range(len(dissimilarity)):
