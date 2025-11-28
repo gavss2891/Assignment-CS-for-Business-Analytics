@@ -53,3 +53,33 @@ for feature_name, count in sorted_features:
 
 print(f"\nTotal unique feature names: {len(feature_name_counts)}")
 
+# Find duplicates sold in the same store
+print("\n" + "=" * 60)
+print("DUPLICATES SOLD IN THE SAME STORE")
+print("=" * 60)
+
+duplicates_in_same_store = []
+
+for model_id, products in data.items():
+    # Group products by shop
+    shop_products = {}
+    for product in products:
+        if 'shop' in product:
+            shop = product['shop']
+            if shop not in shop_products:
+                shop_products[shop] = []
+            shop_products[shop].append(product)
+    
+    # Check if any shop has more than one product for this model_id
+    for shop, shop_product_list in shop_products.items():
+        if len(shop_product_list) > 1:
+            duplicates_in_same_store.append(model_id)
+            break  # Only need to record model_id once
+
+if duplicates_in_same_store:
+    print(f"Found {len(duplicates_in_same_store)} model IDs with duplicates in the same store:")
+    for model_id in sorted(duplicates_in_same_store):
+        print(f"  {model_id}")
+else:
+    print("No duplicates found in the same store.")
+
