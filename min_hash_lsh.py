@@ -1,4 +1,5 @@
 import numpy as np 
+import pandas as pd
 import re
 from collections import OrderedDict
 from ordered_set import OrderedSet
@@ -46,11 +47,12 @@ def get_binary_vector(mw, data):
     return binary_vectors
 
 
-def min_hash(binary_vectors, r):
+def min_hash(binary_vectors, fraction = 0.5):
     num_vec = len(binary_vectors)
     len_vec = len(binary_vectors.get(list(binary_vectors.keys())[0]))
     
-    n = int(round(r * len_vec))
+    # need to round n to work better with the bands later
+    n = round((fraction * len_vec) / 100) * 100
     signature_m = np.full((n, num_vec), np.inf)
     
     p = 200003
@@ -68,11 +70,42 @@ def min_hash(binary_vectors, r):
     return signature_m
 
 
-def main(data, r=0.5):
+def lsh(signature_m, keys, b):
+    n, n_prod = signature_m.shape
+    r = n // b
+    dissim = np.ones((n_prod, n_prod))
+    
+    for band_idx in range(b):
+        start = band_idx * r
+        end = start + r
+        band = signature_m[start:end, :]
+        
+        buckets = {}
+        for i in range(n_prod):
+            sig = tuple(band[:, i])
+            if sig not in buckets:
+                buckets[sig] = []
+            buckets[sig].append(i)
+        
+        for items in buckets.values():
+            if len(items) > 1:
+                for i in range(len(items)):
+                    for j in range(i + 1, len(items)):
+                        idx_i, idx_j = items[i], items[j]
+                        dissim[idx_i, idx_j] = 0.0
+                        dissim[idx_j, idx_i] = 0.0
+
+    candidates = pd.DataFrame(dissim, index=keys, columns=keys)
+
+    return candidates
+
+
+def main(data, fraction=0.5, b = int):
     mw = get_mw(data)
     binary_vectors = get_binary_vector(mw, data)
-    signature_m = min_hash(binary_vectors, r)
-    return signature_m, mw, binary_vectors
+    signature_m = min_hash(binary_vectors, fraction)
+    candidates = lsh(signature_m, data.keys(), b)
+    return candidates
 
 if __name__ == "__main__":
     pass

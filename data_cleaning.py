@@ -94,4 +94,5 @@ def main():
     
     return train, test
 
-main()
+if __name__ == "__main__":
+    main()
