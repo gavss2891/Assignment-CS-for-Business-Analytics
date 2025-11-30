@@ -1,10 +1,10 @@
 import numpy as np 
 import pandas as pd
 import re
-from collections import OrderedDict
+import mmh3
+from collections import OrderedDict, defaultdict
 from ordered_set import OrderedSet
 from primePy import primes
-
 
 def get_mw(data):
     # regex for model words defined same as in MSMP+ paper
@@ -51,8 +51,7 @@ def min_hash(binary_vectors, fraction = 0.5):
     num_vec = len(binary_vectors)
     len_vec = len(binary_vectors.get(list(binary_vectors.keys())[0]))
     
-    # need to round n to work better with the bands later
-    n = round((fraction * len_vec) / 100) * 100
+    n = int(round(fraction * len_vec / 100) * 100)
     signature_m = np.full((n, num_vec), np.inf)
     
     p = 200003
@@ -62,9 +61,7 @@ def min_hash(binary_vectors, fraction = 0.5):
     vec_array = np.array([binary_vectors[key] for key in binary_vectors])
     for i in range(len_vec):
         hashed_values = (a + b * i) % p
-        
         mask = vec_array[:, i] == 1
-    
         signature_m[:, mask] = np.minimum(hashed_values[:, None], signature_m[:, mask])
     
     return signature_m
@@ -73,31 +70,27 @@ def min_hash(binary_vectors, fraction = 0.5):
 def lsh(signature_m, keys, b):
     n, n_prod = signature_m.shape
     r = n // b
-    dissim = np.ones((n_prod, n_prod))
+    candidate_pairs = defaultdict(list)
     
-    for band_idx in range(b):
-        start = band_idx * r
-        end = start + r
-        band = signature_m[start:end, :]
-        
-        buckets = {}
-        for i in range(n_prod):
-            sig = tuple(band[:, i])
-            if sig not in buckets:
-                buckets[sig] = []
-            buckets[sig].append(i)
-        
-        for items in buckets.values():
-            if len(items) > 1:
-                for i in range(len(items)):
-                    for j in range(i + 1, len(items)):
-                        idx_i, idx_j = items[i], items[j]
-                        dissim[idx_i, idx_j] = 0.0
-                        dissim[idx_j, idx_i] = 0.0
-
-    candidates = pd.DataFrame(dissim, index=keys, columns=keys)
-
-    return candidates
+    for j in range(n_prod):
+        for band_idx in range(b):
+            start = band_idx * r
+            band = signature_m[start:start + r, j]
+            candidate_pairs[mmh3.hash(band.tobytes(), seed=42)].append(keys[j])
+    
+    products = list(keys)
+    dissim = np.ones((len(products), len(products)))
+    
+    for pairs in candidate_pairs.values():
+        if len(pairs) > 1:
+            for i in range(len(pairs)):
+                for j in range(i + 1, len(pairs)):
+                    idx_i = products.index(pairs[i])
+                    idx_j = products.index(pairs[j])
+                    dissim[idx_i, idx_j] = 0.0
+                    dissim[idx_j, idx_i] = 0.0
+    
+    return pd.DataFrame(dissim, index=products, columns=products)
 
 
 def main(data, fraction=0.5, b = int):

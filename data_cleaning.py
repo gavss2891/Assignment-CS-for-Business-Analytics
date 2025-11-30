@@ -1,4 +1,5 @@
 import re
+import math
 from collections import OrderedDict
 from sklearn.model_selection import train_test_split
 import json
@@ -13,22 +14,41 @@ def replace(m, string):
         string = pattern.sub(repl, string)
     return string
 
+def round_up_inch_values(string):
+    pattern = r'(\d+\.?\d*)\s*inch\s*'
+    def round_up_match(match):
+        return f"{int(math.ceil(float(match.group(1))))}inch "
+    return re.sub(pattern, round_up_match, string, flags=re.IGNORECASE)
+
+def remove_unwanted_strings(string):
+    unwanted = ["and", "or", "refurbished", "diagonal", "diag.", 
+                "amazon.com", "bestbuy.com", "newegg.com", "thenerds.net",
+                "best buy", "amazon", "newegg", "thenerds", "-", ",", "/", "&"]
+    for item in unwanted:
+        if item in ["-", ",", "/", "&"]:
+            string = string.replace(item, " ")
+        else:
+            string = re.sub(r'\b' + re.escape(item) + r'\b', " ", string, flags=re.IGNORECASE)
+    return re.sub(r'\s+', ' ', string).strip()
 
 def clean_data(data):
-    map_mw = {
-        "inch ": ["Inch", "inches", '"', "-inch", " inch", "inch"],
-        "hz ": ["Hertz", "hertz", "Hz", "HZ", " hz", "-hz", "hz"]
-    }
+    map_mw = {"inch ": ["inches", "Inch", '"', "-inch", " inch", "inch"],
+              "hz ": ["Hertz", "hertz", "Hz", "HZ", " hz", "-hz", "hz"]}
     
     for name, products in data.items():
         for product in products:
             if "title" in product and product["title"]:
-                product["title"] = replace(map_mw, product["title"].lower())
+                title = replace(map_mw, product["title"].lower())
+                title = round_up_inch_values(title)
+                title = re.sub(r'16:09', '16:9', title)
+                product["title"] = remove_unwanted_strings(title)
             
             if "featuresMap" in product and isinstance(product["featuresMap"], dict):
                 for feature, value in product["featuresMap"].items():
                     if value:
-                        product["featuresMap"][feature] = replace(map_mw, value.lower())
+                        cleaned = replace(map_mw, value.lower())
+                        cleaned = re.sub(r'16:09', '16:9', cleaned)
+                        product["featuresMap"][feature] = remove_unwanted_strings(cleaned)
     
     return data
 
