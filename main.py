@@ -5,7 +5,7 @@ import pickle
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from collections import OrderedDict, defaultdict
+from collections import defaultdict
 from itertools import combinations
 from sympy import divisors
 from multiprocessing import Pool, cpu_count
@@ -67,25 +67,24 @@ def check_duplicates(data, dissimilarity, candidates, clusters):
 
     return (F_1, F_1_star, PC, PQ, n_comp, frac_comp)
 
-def plot_metrics(dataframe, metric1, metric2, path):
+def plot_metrics(dataframe_corrected, dataframe_no_correction, metric1, metric2, path):
     os.makedirs(path, exist_ok=True)
-    grouped_df = dataframe.groupby(metric1, as_index=False).agg({metric2: 'max'})
-    horizontal = grouped_df[metric1]
-    vertical = grouped_df[metric2]
-
-    plt.figure(figsize=(8, 6))
-    plt.plot(horizontal, vertical, marker='o', linestyle='-')
-    title = f"{metric1} vs. {metric2}"
-    plt.title(title)
+    grouped_corrected = dataframe_corrected.groupby(metric1, as_index=False).agg({metric2: 'max'})
+    grouped_no_correction = dataframe_no_correction.groupby(metric1, as_index=False).agg({metric2: 'max'})
+    title = f"{metric1} vs. {metric2}".replace("*", "star")
+    filename = f"{title}.png"
     
-    if "*" in title:
-        title = title.replace("*", "star")
-
+    plt.figure(figsize=(8, 6))
+    plt.plot(grouped_corrected[metric1], grouped_corrected[metric2], color='black', linestyle='-', label='Data correction')
+    plt.plot(grouped_no_correction[metric1], grouped_no_correction[metric2], color='0.3', linestyle='--', label='No data correction')
+    
+    if metric2 == "F1":
+        plt.axhline(y=0.525, color='red', linewidth=0.5, linestyle='-', label='MSM benchmark')
+    
     plt.xlabel(metric1)
     plt.ylabel(metric2)
-    plt.grid(True)
-    file_path = os.path.join(path, f"{title}.png")
-    plt.savefig(file_path)
+    plt.legend()
+    plt.savefig(os.path.join(path, filename))
     plt.close()
 
 def save_checkpoint(checkpoint_dir, bootstrap_id, store_df, metrics_summary):
@@ -110,23 +109,15 @@ def load_checkpoint(checkpoint_dir, bootstrap_id):
 def get_completed_bootstraps(checkpoint_dir):
     if not os.path.exists(checkpoint_dir):
         return []
-    completed = []
-    for file in os.listdir(checkpoint_dir):
-        if file.startswith("bootstrap_") and file.endswith(".pkl"):
-            bootstrap_id = int(file.split("_")[1].split(".")[0])
-            completed.append(bootstrap_id)
-    return sorted(completed)
+    return sorted([int(f.split("_")[1].split(".")[0]) 
+                   for f in os.listdir(checkpoint_dir) 
+                   if f.startswith("bootstrap_") and f.endswith(".pkl")])
 
 def load_tv_brands():
     csv_path = os.path.join(os.path.dirname(__file__), 'television_brands.csv')
-    brands = []
-    with open(csv_path, newline='', encoding='utf-8') as csvfile:
-        reader = csv.DictReader(csvfile)
-        for row in reader:
-            brand = row.get('Brand', '').strip()
-            if brand:
-                brands.append(brand.lower())
-    return sorted(brands, key=len, reverse=True)
+    with open(csv_path, newline='', encoding='utf-8') as f:
+        return sorted([r['Brand'].strip().lower() for r in csv.DictReader(f) if r.get('Brand', '').strip()], 
+                     key=len, reverse=True)
 
 def get_factors(n):
     return sorted(divisors(n))
@@ -178,7 +169,7 @@ def run_bootstrap(args):
     data, bootstrap_id, checkpoint_dir, params = args
     print(f"Running bootstrap {bootstrap_id + 1}\n")
     
-    cleaned_data = data_cleaning.clean_data(data.copy())
+    cleaned_data = data_cleaning.clean_data(data.copy(), data_correction=params['data_correction'])
     dup, non_dup = data_cleaning.separate_duplicates(cleaned_data)
     train, test = data_cleaning.test_train_split(dup, non_dup)
     
@@ -193,8 +184,7 @@ def run_bootstrap(args):
     factors_train = get_factors(n_train)
     
     valid_factors = [f for f in factors_train 
-                     if (n_train // f) > 0 and params['threshold_min'] <= ((1.0 / f) ** (1.0 / (n_train // f))) <= params['threshold_max']]
-    
+                     if params['threshold_min'] <= ((1.0 / f) ** (1.0 / (n_train // f))) <= params['threshold_max']]
     b_to_try = valid_factors if len(valid_factors) <= 3 else [
         valid_factors[0], valid_factors[len(valid_factors) // 2], valid_factors[-1]
     ]
@@ -222,7 +212,7 @@ def run_bootstrap(args):
     sig_matrix_test = lsh.min_hash(binary_vectors_test, fraction=params['fraction'])
     
     n_test = sig_matrix_test.shape[0]
-    factors_test = get_factors(n_test)
+    factors_test = [f for f in get_factors(n_test) if f >= 15]
     
     columns = ["Threshold", "F1", "F1*", "PC", "PQ", "Number Comparisons", "Fraction Comparisons"]
     store_df = pd.DataFrame(np.zeros((len(factors_test), len(columns))), columns=columns, index=factors_test)
@@ -232,12 +222,9 @@ def run_bootstrap(args):
     for factor in factors_test:
         candidate_pairs = lsh.lsh(sig_matrix_test, keys_test, factor)
         r = n_test // factor
-        threshold = (1.0 / factor) ** (1.0 / r) if r > 0 else 1.0
-        
+        threshold = (1.0 / factor) ** (1.0 / r)
         clustered, dissimilarity = msm.main(candidate_pairs, test, best_params['gamma'], best_params['epsilon'], best_params['mu'])
-        metrics = check_duplicates(test, dissimilarity, candidate_pairs, clustered)
-        
-        store_df.loc[factor] = [threshold, metrics[0], metrics[1], metrics[2], metrics[3], metrics[4], metrics[5]]
+        store_df.loc[factor] = [threshold] + list(check_duplicates(test, dissimilarity, candidate_pairs, clustered))
     
     metrics_summary = calculate_metrics_summary(store_df, best_params)
     print_metrics_summary(metrics_summary, bootstrap_id)
@@ -246,17 +233,9 @@ def run_bootstrap(args):
     
     return store_df, metrics_summary
 
-def main_func(path="TVs-all-merged.json", path_res=".", bootstraps=10, checkpoint_dir="checkpoints", 
-              gammas=[0.75], epsilons=[0.5], mus=[0.7], fraction=0.5, threshold_min=0.15, threshold_max=0.4):
-    
-    params = {
-        'gammas': gammas,
-        'epsilons': epsilons,
-        'mus': mus,
-        'fraction': fraction,
-        'threshold_min': threshold_min,
-        'threshold_max': threshold_max
-    }
+def run_single_experiment(path, bootstraps, checkpoint_dir, params, data_correction):
+    """Run a single experiment with given data_correction setting"""
+    params['data_correction'] = data_correction
     
     with open(path, 'r', encoding='utf-8') as file:
         data = json.load(file)
@@ -290,61 +269,105 @@ def main_func(path="TVs-all-merged.json", path_res=".", bootstraps=10, checkpoin
             metrics_summaries[i] = metrics_summary
     
     results_list = [results[i] for i in range(bootstraps)]
-    factors = results_list[0].index
-    columns = results_list[0].columns
-    cumulative_df = pd.DataFrame(np.zeros((len(factors), len(columns))), columns=columns, index=factors)
+    average_df = sum(results_list) / len(results_list)
     
-    for result_df in results_list:
-        cumulative_df += result_df
+    return average_df, metrics_summaries
+
+def main_func(path="TVs-all-merged.json", path_res=".", bootstraps=10, checkpoint_dir="checkpoints", 
+              gammas=[0.75], epsilons=[0.5], mus=[0.7], fraction=0.5, threshold_min=0.15, threshold_max=0.4,
+              data_correction=True, compare=False):
     
-    average_df = cumulative_df / bootstraps
+    params = {
+        'gammas': gammas,
+        'epsilons': epsilons,
+        'mus': mus,
+        'fraction': fraction,
+        'threshold_min': threshold_min,
+        'threshold_max': threshold_max
+    }
     
-    final_results_file = os.path.join(checkpoint_dir, "final_results.pkl")
-    with open(final_results_file, 'wb') as f:
-        pickle.dump(average_df, f)
-    print(f"Saved final results to {final_results_file}\n")
-    
-    print("Final Results:")
-    print(average_df)
-    
-    final_metrics = calculate_metrics_summary(average_df)
-    
-    if metrics_summaries:
-        gammas = [m['best_gamma'] for m in metrics_summaries.values() if 'best_gamma' in m]
-        epsilons = [m['best_epsilon'] for m in metrics_summaries.values() if 'best_epsilon' in m]
-        mus = [m['best_mu'] for m in metrics_summaries.values() if 'best_mu' in m]
+    if compare:
+        print("="*60)
+        print("RUNNING COMPARISON: WITH vs WITHOUT DATA CORRECTION")
+        print("="*60)
         
-        if gammas:
-            final_metrics['avg_gamma'] = np.mean(gammas)
-            final_metrics['std_gamma'] = np.std(gammas)
-            final_metrics['avg_epsilon'] = np.mean(epsilons)
-            final_metrics['std_epsilon'] = np.std(epsilons)
-            final_metrics['avg_mu'] = np.mean(mus)
-            final_metrics['std_mu'] = np.std(mus)
-    
-    print_metrics_summary(final_metrics)
-    
-    if 'avg_gamma' in final_metrics:
-        print(f"\n{'='*60}")
-        print("PARAMETER STATISTICS ACROSS BOOTSTRAPS")
-        print(f"{'='*60}")
-        print(f"Gamma:    avg={final_metrics['avg_gamma']:.4f}, std={final_metrics['std_gamma']:.4f}")
-        print(f"Epsilon:  avg={final_metrics['avg_epsilon']:.4f}, std={final_metrics['std_epsilon']:.4f}")
-        print(f"Mu:       avg={final_metrics['avg_mu']:.4f}, std={final_metrics['std_mu']:.4f}")
-        print(f"{'='*60}\n")
-    
-    plot_metrics(average_df, "Fraction Comparisons", "F1", path_res)
-    plot_metrics(average_df, "Fraction Comparisons", "F1*", path_res)
-    plot_metrics(average_df, "Fraction Comparisons", "PC", path_res)
-    
-    to_drop = average_df.copy()
-    to_drop.drop(to_drop.loc[to_drop['Fraction Comparisons'] == 0].index, inplace=True)
-    plot_metrics(to_drop, "Fraction Comparisons", "PQ", path_res)
-    
-    return average_df
+        checkpoint_dir_corrected = checkpoint_dir + "_corrected"
+        checkpoint_dir_no_correction = checkpoint_dir + "_no_correction"
+        
+        print("\n--- Running WITH data correction ---")
+        average_df_corrected, metrics_summaries_corrected = run_single_experiment(
+            path, bootstraps, checkpoint_dir_corrected, params.copy(), True
+        )
+        
+        print("\n--- Running WITHOUT data correction ---")
+        average_df_no_correction, metrics_summaries_no_correction = run_single_experiment(
+            path, bootstraps, checkpoint_dir_no_correction, params.copy(), False
+        )
+        
+        print("\n" + "="*60)
+        print("FINAL RESULTS COMPARISON")
+        print("="*60)
+        print("\nWITH Data Correction:")
+        print(average_df_corrected)
+        print("\nWITHOUT Data Correction:")
+        print(average_df_no_correction)
+        
+        final_metrics_corrected = calculate_metrics_summary(average_df_corrected)
+        final_metrics_no_correction = calculate_metrics_summary(average_df_no_correction)
+        
+        print("\n--- Metrics WITH Data Correction ---")
+        print_metrics_summary(final_metrics_corrected)
+        print("\n--- Metrics WITHOUT Data Correction ---")
+        print_metrics_summary(final_metrics_no_correction)
+        
+        plot_metrics(average_df_corrected, average_df_no_correction, "Fraction Comparisons", "F1", path_res)
+        plot_metrics(average_df_corrected, average_df_no_correction, "Fraction Comparisons", "F1*", path_res)
+        plot_metrics(average_df_corrected, average_df_no_correction, "Fraction Comparisons", "PC", path_res)
+        
+        pq_corrected = average_df_corrected[average_df_corrected['Fraction Comparisons'] > 0]
+        pq_no_correction = average_df_no_correction[average_df_no_correction['Fraction Comparisons'] > 0]
+        plot_metrics(pq_corrected, pq_no_correction, "Fraction Comparisons", "PQ", path_res)
+        
+        return average_df_corrected, average_df_no_correction
+    else:
+        average_df, metrics_summaries = run_single_experiment(path, bootstraps, checkpoint_dir, params, data_correction)
+        
+        final_results_file = os.path.join(checkpoint_dir, "final_results.pkl")
+        with open(final_results_file, 'wb') as f:
+            pickle.dump(average_df, f)
+        print(f"Saved final results to {final_results_file}\n")
+        
+        correction_label = "WITH Data Correction" if data_correction else "WITHOUT Data Correction"
+        print(f"\nFinal Results ({correction_label}):")
+        print(average_df)
+        
+        final_metrics = calculate_metrics_summary(average_df)
+        
+        if metrics_summaries:
+            gammas = [m['best_gamma'] for m in metrics_summaries.values() if 'best_gamma' in m]
+            epsilons = [m['best_epsilon'] for m in metrics_summaries.values() if 'best_epsilon' in m]
+            mus = [m['best_mu'] for m in metrics_summaries.values() if 'best_mu' in m]
+            if gammas:
+                final_metrics.update({
+                    'avg_gamma': np.mean(gammas), 'std_gamma': np.std(gammas),
+                    'avg_epsilon': np.mean(epsilons), 'std_epsilon': np.std(epsilons),
+                    'avg_mu': np.mean(mus), 'std_mu': np.std(mus)
+                })
+        
+        print_metrics_summary(final_metrics)
+        
+        if 'avg_gamma' in final_metrics:
+            print(f"\n{'='*60}")
+            print("PARAMETER STATISTICS ACROSS BOOTSTRAPS")
+            print(f"{'='*60}")
+            print(f"Gamma:    avg={final_metrics['avg_gamma']:.4f}, std={final_metrics['std_gamma']:.4f}")
+            print(f"Epsilon:  avg={final_metrics['avg_epsilon']:.4f}, std={final_metrics['std_epsilon']:.4f}")
+            print(f"Mu:       avg={final_metrics['avg_mu']:.4f}, std={final_metrics['std_mu']:.4f}")
+            print(f"{'='*60}\n")
+        
+        return average_df
 
 if __name__ == "__main__":
-    # Configure all parameters here
     main_func(
         path="TVs-all-merged.json",
         path_res=".",
@@ -355,5 +378,6 @@ if __name__ == "__main__":
         mus=[0.6, 0.65, 0.7],
         fraction=0.5,
         threshold_min=0.15,
-        threshold_max=0.4
+        threshold_max=0.4,
+        compare=True
     )

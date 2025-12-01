@@ -31,7 +31,7 @@ def remove_unwanted_strings(string):
             string = re.sub(r'\b' + re.escape(item) + r'\b', " ", string, flags=re.IGNORECASE)
     return re.sub(r'\s+', ' ', string).strip()
 
-def clean_data(data):
+def clean_data(data, data_correction=True):
     map_mw = {"inch ": ["inches", "Inch", '"', "-inch", " inch", "inch"],
               "hz ": ["Hertz", "hertz", "Hz", "HZ", " hz", "-hz", "hz"]}
     
@@ -39,16 +39,22 @@ def clean_data(data):
         for product in products:
             if "title" in product and product["title"]:
                 title = replace(map_mw, product["title"].lower())
-                title = round_up_inch_values(title)
-                title = re.sub(r'16:09', '16:9', title)
-                product["title"] = remove_unwanted_strings(title)
+                if data_correction:
+                    title = round_up_inch_values(title)
+                    title = re.sub(r'16:09', '16:9', title)
+                    product["title"] = remove_unwanted_strings(title)
+                else:
+                    product["title"] = title
             
             if "featuresMap" in product and isinstance(product["featuresMap"], dict):
                 for feature, value in product["featuresMap"].items():
                     if value:
                         cleaned = replace(map_mw, value.lower())
-                        cleaned = re.sub(r'16:09', '16:9', cleaned)
-                        product["featuresMap"][feature] = remove_unwanted_strings(cleaned)
+                        if data_correction:
+                            cleaned = re.sub(r'16:09', '16:9', cleaned)
+                            product["featuresMap"][feature] = remove_unwanted_strings(cleaned)
+                        else:
+                            product["featuresMap"][feature] = cleaned
     
     return data
 
