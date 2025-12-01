@@ -51,7 +51,7 @@ def min_hash(binary_vectors, fraction = 0.5):
     num_vec = len(binary_vectors)
     len_vec = len(binary_vectors.get(list(binary_vectors.keys())[0]))
     
-    n = int(round(fraction * len_vec / 100) * 100)
+    n = int(round(fraction * len_vec / 120) * 120)
     signature_m = np.full((n, num_vec), np.inf)
     
     p = 200003

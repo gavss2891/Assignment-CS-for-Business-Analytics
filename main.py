@@ -192,31 +192,28 @@ def run_bootstrap(args):
     n_train = sig_matrix_train.shape[0]
     factors_train = get_factors(n_train)
     
-    b_optimise = factors_train[len(factors_train) // 2]
-    for factor in factors_train:
-        r = n_train // factor
-        threshold = (1.0 / factor) ** (1.0 / r) if r > 0 else 1.0
-        if params['threshold_min'] <= threshold <= params['threshold_max']:
-            b_optimise = factor
-            break
+    valid_factors = [f for f in factors_train 
+                     if (n_train // f) > 0 and params['threshold_min'] <= ((1.0 / f) ** (1.0 / (n_train // f))) <= params['threshold_max']]
+    
+    b_to_try = valid_factors if len(valid_factors) <= 3 else [
+        valid_factors[0], valid_factors[len(valid_factors) // 2], valid_factors[-1]
+    ]
     
     keys_train = list(train.keys())
-    candidate_pairs_train = lsh.lsh(sig_matrix_train, keys_train, b_optimise)
+    best_params, best_f1 = {}, 0
     
-    best_params = {}
-    best_f1 = 0
+    print(f"Tuning parameters across {len(b_to_try)} b values: {b_to_try}...")
     
-    print("Tuning parameters...")
-    for gamma in params['gammas']:
-        for epsilon in params['epsilons']:
-            for mu in params['mus']:
-                clustered, dissimilarity = msm.main(candidate_pairs_train, train, gamma, epsilon, mu)
-                metrics = check_duplicates(train, dissimilarity, candidate_pairs_train, clustered)
-                f1 = metrics[0]
-                
-                if f1 > best_f1:
-                    best_params = {'gamma': gamma, 'epsilon': epsilon, 'mu': mu}
-                    best_f1 = f1
+    for b in b_to_try:
+        candidate_pairs = lsh.lsh(sig_matrix_train, keys_train, b)
+        for gamma in params['gammas']:
+            for epsilon in params['epsilons']:
+                for mu in params['mus']:
+                    clustered, dissimilarity = msm.main(candidate_pairs, train, gamma, epsilon, mu)
+                    f1 = check_duplicates(train, dissimilarity, candidate_pairs, clustered)[0]
+                    if f1 > best_f1:
+                        best_params = {'gamma': gamma, 'epsilon': epsilon, 'mu': mu}
+                        best_f1 = f1
     
     print(f"Best params: {best_params}, F1: {best_f1:.4f}\n")
     
@@ -250,14 +247,7 @@ def run_bootstrap(args):
     return store_df, metrics_summary
 
 def main_func(path="TVs-all-merged.json", path_res=".", bootstraps=10, checkpoint_dir="checkpoints", 
-              gammas=None, epsilons=None, mus=None, fraction=0.5, threshold_min=0.15, threshold_max=0.4):
-    
-    if gammas is None:
-        gammas = [0.6, 0.7, 0.75, 0.8, 0.9]
-    if epsilons is None:
-        epsilons = [0.4, 0.5, 0.6]
-    if mus is None:
-        mus = [0.4, 0.5, 0.6, 0.65, 0.7, 0.8, 0.9]
+              gammas=[0.75], epsilons=[0.5], mus=[0.7], fraction=0.5, threshold_min=0.15, threshold_max=0.4):
     
     params = {
         'gammas': gammas,
