@@ -31,9 +31,17 @@ def remove_unwanted_strings(string):
             string = re.sub(r'\b' + re.escape(item) + r'\b', " ", string, flags=re.IGNORECASE)
     return re.sub(r'\s+', ' ', string).strip()
 
+def remove_trailing_colon_from_feature_names(feature_name):
+    if feature_name.endswith(":"):
+        return feature_name[:-1]
+    return feature_name
+
 def clean_data(data, data_correction=True):
     map_mw = {"inch ": ["inches", "Inch", '"', "-inch", " inch", "inch"],
               "hz ": ["Hertz", "hertz", "Hz", "HZ", " hz", "-hz", "hz"]}
+    
+    if data_correction:
+        map_mw["lbs "] = ["pound", "pounds", "Pound", "Pounds", "lb", "lbs", "LB", "LBS", "-lb", "-lbs", " lb", " lbs"]
     
     for name, products in data.items():
         for product in products:
@@ -47,14 +55,24 @@ def clean_data(data, data_correction=True):
                     product["title"] = title
             
             if "featuresMap" in product and isinstance(product["featuresMap"], dict):
+                # Create a new dictionary with cleaned feature names
+                cleaned_features = {}
                 for feature, value in product["featuresMap"].items():
+                    # Remove trailing colon from feature name
+                    cleaned_feature_name = remove_trailing_colon_from_feature_names(feature)
+                    
                     if value:
                         cleaned = replace(map_mw, value.lower())
                         if data_correction:
                             cleaned = re.sub(r'16:09', '16:9', cleaned)
-                            product["featuresMap"][feature] = remove_unwanted_strings(cleaned)
+                            cleaned_features[cleaned_feature_name] = remove_unwanted_strings(cleaned)
                         else:
-                            product["featuresMap"][feature] = cleaned
+                            cleaned_features[cleaned_feature_name] = cleaned
+                    else:
+                        cleaned_features[cleaned_feature_name] = value
+                
+                # Replace the featuresMap with cleaned version
+                product["featuresMap"] = cleaned_features
     
     return data
 

@@ -65,7 +65,7 @@ def check_duplicates(data, dissimilarity, candidates, clusters):
     F_1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) != 0 else 0
     F_1_star = (2 * PQ * PC) / (PQ + PC) if PQ + PC != 0 else 0
 
-    return (F_1, F_1_star, PC, PQ, n_comp, frac_comp)
+    return (F_1, F_1_star, PC, PQ, n_comp, frac_comp, precision, recall)
 
 def plot_metrics(dataframe_corrected, dataframe_no_correction, metric1, metric2, path):
     os.makedirs(path, exist_ok=True)
@@ -75,11 +75,8 @@ def plot_metrics(dataframe_corrected, dataframe_no_correction, metric1, metric2,
     filename = f"{title}.png"
     
     plt.figure(figsize=(8, 6))
-    plt.plot(grouped_corrected[metric1], grouped_corrected[metric2], color='black', linestyle='-', label='Data correction')
-    plt.plot(grouped_no_correction[metric1], grouped_no_correction[metric2], color='0.3', linestyle='--', label='No data correction')
-    
-    if metric2 == "F1":
-        plt.axhline(y=0.525, color='red', linewidth=0.5, linestyle='-', label='MSM benchmark')
+    plt.plot(grouped_corrected[metric1], grouped_corrected[metric2], color='black', linestyle='-', label='CleanMSMP+')
+    plt.plot(grouped_no_correction[metric1], grouped_no_correction[metric2], color='0.3', linestyle='--', label='MSMP+')
     
     plt.xlabel(metric1)
     plt.ylabel(metric2)
@@ -214,7 +211,7 @@ def run_bootstrap(args):
     n_test = sig_matrix_test.shape[0]
     factors_test = [f for f in get_factors(n_test) if f >= 15]
     
-    columns = ["Threshold", "F1", "F1*", "PC", "PQ", "Number Comparisons", "Fraction Comparisons"]
+    columns = ["Threshold", "F1", "F1*", "PC", "PQ", "Number Comparisons", "Fraction Comparisons", "Precision", "Recall"]
     store_df = pd.DataFrame(np.zeros((len(factors_test), len(columns))), columns=columns, index=factors_test)
     
     keys_test = list(test.keys())
@@ -327,6 +324,9 @@ def main_func(path="TVs-all-merged.json", path_res=".", bootstraps=10, checkpoin
         pq_corrected = average_df_corrected[average_df_corrected['Fraction Comparisons'] > 0]
         pq_no_correction = average_df_no_correction[average_df_no_correction['Fraction Comparisons'] > 0]
         plot_metrics(pq_corrected, pq_no_correction, "Fraction Comparisons", "PQ", path_res)
+        
+        plot_metrics(average_df_corrected, average_df_no_correction, "Fraction Comparisons", "Precision", path_res)
+        plot_metrics(average_df_corrected, average_df_no_correction, "Fraction Comparisons", "Recall", path_res)
         
         return average_df_corrected, average_df_no_correction
     else:
